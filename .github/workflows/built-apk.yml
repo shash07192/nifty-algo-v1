@@ -1,0 +1,360 @@
+name: Build NIFTY Algo APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Setup Android SDK
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Create Android project
+        run: |
+          mkdir -p app/src/main/java/com/niftyalgo/app
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "NIFTY-Algo-V1"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.niftyalgo.app'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.niftyalgo.app'
+                  minSdk 26
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <application
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar"
+                  android:label="NIFTY Algo V1"
+                  android:allowBackup="false"
+                  android:supportsRtl="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:screenOrientation="portrait"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                  </activity>
+              </application>
+
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/niftyalgo/app/MainActivity.java <<'EOF'
+          package com.niftyalgo.app;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.graphics.Typeface;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class MainActivity extends Activity {
+
+              EditText price, ema20, ema50, vwap, atr, volume;
+              TextView signal, details, journal;
+              int trades = 0;
+              int wins = 0;
+              int losses = 0;
+              double points = 0;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  ScrollView scroll = new ScrollView(this);
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(32, 32, 32, 32);
+
+                  TextView title = new TextView(this);
+                  title.setText("NIFTY ALGO V1");
+                  title.setTextSize(28);
+                  title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                  title.setGravity(Gravity.CENTER);
+                  root.addView(title);
+
+                  TextView subtitle = new TextView(this);
+                  subtitle.setText(
+                      "Paper-Trading Signal Engine\\n" +
+                      "Capital protection first • No live orders"
+                  );
+                  subtitle.setTextSize(16);
+                  subtitle.setGravity(Gravity.CENTER);
+                  root.addView(subtitle);
+
+                  root.addView(space());
+
+                  price = field(root, "NIFTY Spot Price");
+                  ema20 = field(root, "EMA 20");
+                  ema50 = field(root, "EMA 50");
+                  vwap = field(root, "VWAP");
+                  atr = field(root, "ATR");
+                  volume = field(root, "Volume Ratio (example: 1.5)");
+
+                  Button calculate = new Button(this);
+                  calculate.setText("CALCULATE SIGNAL");
+                  root.addView(calculate);
+
+                  signal = new TextView(this);
+                  signal.setText("SIGNAL: WAITING FOR DATA");
+                  signal.setTextSize(22);
+                  signal.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                  signal.setGravity(Gravity.CENTER);
+                  root.addView(signal);
+
+                  details = new TextView(this);
+                  details.setTextSize(16);
+                  root.addView(details);
+
+                  Button paperBuy = new Button(this);
+                  paperBuy.setText("PAPER BUY");
+                  root.addView(paperBuy);
+
+                  Button paperSell = new Button(this);
+                  paperSell.setText("PAPER SELL");
+                  root.addView(paperSell);
+
+                  journal = new TextView(this);
+                  journal.setTextSize(16);
+                  journal.setText("Journal: 0 trades");
+                  root.addView(journal);
+
+                  TextView status = new TextView(this);
+                  status.setText(
+                      "\\nSYSTEM STATUS\\n" +
+                      "• Paper trading: ENABLED\\n" +
+                      "• Live order execution: DISABLED\\n" +
+                      "• Upstox live feed: NOT CONNECTED\\n" +
+                      "• Minimum target: 1:2 R:R\\n" +
+                      "• Conflicting evidence: NO TRADE"
+                  );
+                  status.setTextSize(15);
+                  root.addView(status);
+
+                  calculate.setOnClickListener(v -> calculateSignal());
+                  paperBuy.setOnClickListener(v -> paperTrade("BUY"));
+                  paperSell.setOnClickListener(v -> paperTrade("SELL"));
+
+                  scroll.addView(root);
+                  setContentView(scroll);
+              }
+
+              EditText field(LinearLayout root, String hint) {
+                  EditText e = new EditText(this);
+                  e.setHint(hint);
+                  e.setInputType(2 | 8192);
+                  e.setPadding(16, 16, 16, 16);
+                  root.addView(e);
+                  return e;
+              }
+
+              TextView space() {
+                  TextView s = new TextView(this);
+                  s.setText("\\n");
+                  return s;
+              }
+
+              double val(EditText e) {
+                  return Double.parseDouble(e.getText().toString().trim());
+              }
+
+              void calculateSignal() {
+                  try {
+                      double p = val(price);
+                      double e20 = val(ema20);
+                      double e50 = val(ema50);
+                      double vw = val(vwap);
+                      double a = val(atr);
+                      double vol = val(volume);
+
+                      boolean bullish =
+                          p > e20 &&
+                          e20 > e50 &&
+                          p > vw &&
+                          vol >= 1.2;
+
+                      boolean bearish =
+                          p < e20 &&
+                          e20 < e50 &&
+                          p < vw &&
+                          vol >= 1.2;
+
+                      if (a <= 0) {
+                          signal.setText("SIGNAL: NO TRADE");
+                          details.setText("ATR must be greater than zero.");
+                          return;
+                      }
+
+                      if (bullish) {
+                          double sl = p - a;
+                          double target = p + (2 * a);
+
+                          signal.setText("SIGNAL: BULLISH / PAPER BUY");
+                          details.setText(
+                              "Entry: " + fmt(p) +
+                              "\\nStop Loss: " + fmt(sl) +
+                              "\\nTarget: " + fmt(target) +
+                              "\\nRisk/Reward: 1:2" +
+                              "\\n\\nConfirmation: Price > EMA20 > EMA50, " +
+                              "price > VWAP and volume ratio >= 1.2"
+                          );
+                      } else if (bearish) {
+                          double sl = p + a;
+                          double target = p - (2 * a);
+
+                          signal.setText("SIGNAL: BEARISH / PAPER SELL");
+                          details.setText(
+                              "Entry: " + fmt(p) +
+                              "\\nStop Loss: " + fmt(sl) +
+                              "\\nTarget: " + fmt(target) +
+                              "\\nRisk/Reward: 1:2" +
+                              "\\n\\nConfirmation: Price < EMA20 < EMA50, " +
+                              "price < VWAP and volume ratio >= 1.2"
+                          );
+                      } else {
+                          signal.setText("SIGNAL: NO TRADE");
+                          details.setText(
+                              "Confluence is insufficient.\\n" +
+                              "Wait for clearer price structure."
+                          );
+                      }
+
+                  } catch (Exception ex) {
+                      signal.setText("SIGNAL: NO TRADE");
+                      details.setText("Enter valid numeric values in all fields.");
+                  }
+              }
+
+              void paperTrade(String side) {
+                  try {
+                      double p = val(price);
+                      double a = val(atr);
+
+                      if (a <= 0) {
+                          Toast.makeText(this, "Enter a valid ATR", Toast.LENGTH_SHORT).show();
+                          return;
+                      }
+
+                      trades++;
+
+                      boolean win = Math.random() >= 0.5;
+
+                      if (win) {
+                          wins++;
+                          points += (2 * a);
+                      } else {
+                          losses++;
+                          points -= a;
+                      }
+
+                      journal.setText(
+                          "Paper Journal\\n" +
+                          "Trades: " + trades +
+                          "\\nWins: " + wins +
+                          "\\nLosses: " + losses +
+                          "\\nSimulated Points: " + fmt(points) +
+                          "\\nLast: " + side + " @ " + fmt(p)
+                      );
+
+                  } catch (Exception ex) {
+                      Toast.makeText(this, "Enter price and ATR first", Toast.LENGTH_SHORT).show();
+                  }
+              }
+
+              String fmt(double x) {
+                  return String.format(java.util.Locale.US, "%.2f", x);
+              }
+          }
+          EOF
+
+      - name: Build debug APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NIFTY-Algo-V1-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
